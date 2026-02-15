@@ -1,8 +1,8 @@
 # 1. Official Python Image
 FROM python:3.10-slim
 
-# 2. System tools aur downloader install karo
-RUN apt-get update && apt-get install -y aria2 curl
+# 2. System tools (aria2 hata diya, sirf curl rakha hai)
+RUN apt-get update && apt-get install -y curl
 
 # 3. Folder set karo
 WORKDIR /app
