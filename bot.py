@@ -1,7 +1,31 @@
 import os
 import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telebot.async_telebot import AsyncTeleBot
 from playwright.async_api import async_playwright
+
+# --- 🌐 RENDER DUMMY WEB SERVER ---
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is Zinda and Running on Render!")
+
+def run_server():
+    # Render khud ek PORT (darwaza) deta hai, humein wahi use karna hai
+    port = int(os.environ.get("PORT", 10000))
+    try:
+        server = HTTPServer(('0.0.0.0', port), DummyHandler)
+        print(f"🌐 Web server started on port {port}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"Web server error: {e}")
+
+# Web server ko background mein chalao
+threading.Thread(target=run_server, daemon=True).start()
+# -----------------------------------
 
 # 🔑 Aapka Bot Token
 TOKEN = "8334787902:AAHrmpTxnBCmqhfCDBaAAdU4j7IB5Xdd1ks"
@@ -19,7 +43,7 @@ def get_event():
 
 @bot.message_handler(commands=['start'])
 async def send_welcome(message):
-    await bot.reply_to(message, "✨ **Jazz Drive Master Bot (Railway Edition)!** ✨\n\nBhai, direct link bhejo main upload kar dunga!", parse_mode="Markdown")
+    await bot.reply_to(message, "✨ **Jazz Drive Master Bot (Render Edition)!** ✨\n\nBhai, direct link bhejo main upload kar dunga!", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
 async def handle_all_messages(message):
@@ -66,7 +90,7 @@ async def process_upload(chat_id, link):
     try:
         if os.path.exists(file_name): os.remove(file_name)
         
-        # 🔥 THE FIX: aria2 ki jagah Railway-Approved 'curl' use kar rahe hain
+        # Download file using curl (Railway aur Render dono par allow hai)
         os.system(f"curl -L -o {file_name} '{link}'")
         
         if not os.path.exists(file_name):
@@ -142,5 +166,5 @@ async def process_upload(chat_id, link):
         bot_state = "IDLE" 
 
 if __name__ == '__main__':
-    print("🤖 Railway Bot engine start ho raha hai...")
+    print("🤖 Render Bot engine start ho raha hai...")
     asyncio.run(bot.polling(non_stop=True, request_timeout=90))
