@@ -65,7 +65,9 @@ async def process_upload(chat_id, link):
     
     try:
         if os.path.exists(file_name): os.remove(file_name)
-        os.system(f"aria2c -x 16 -s 16 -o {file_name} '{link}'")
+        
+        # 🔥 THE FIX: aria2 ki jagah Railway-Approved 'curl' use kar rahe hain
+        os.system(f"curl -L -o {file_name} '{link}'")
         
         if not os.path.exists(file_name):
             await bot.send_message(chat_id, "❌ Download Error! Link kharab hai.")
