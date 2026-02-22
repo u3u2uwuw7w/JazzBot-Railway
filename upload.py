@@ -5,19 +5,27 @@ import queue
 import logging
 import re
 import subprocess
+import sys
 import telebot
 from playwright.sync_api import sync_playwright
 
-# ==================== TRY IMPORT PYTUBEFIX ====================
+# ==================== PYTUBEFIX IMPORT WITH VERSION CHECK ====================
+PYTUBEFIX_AVAILABLE = False
+PYTUBEFIX_HAS_CALLBACK = False
+
 try:
     from pytubefix import YouTube
     from pytubefix.cli import on_progress
     PYTUBEFIX_AVAILABLE = True
+    
+    # Check if on_oauth_callback parameter exists
+    import inspect
+    sig = inspect.signature(YouTube.__init__)
+    PYTUBEFIX_HAS_CALLBACK = 'on_oauth_callback' in sig.parameters
 except ImportError:
-    PYTUBEFIX_AVAILABLE = False
-    print("⚠️ pytubefix not installed. YouTube downloads disabled.")
+    print("⚠️ pytubefix not installed")
 
-# ==================== CONFIG ====================
+# 🔑 APNI DETAILS
 TOKEN = "8599854738:AAH330JR9zLBXYvNTONm7HF9q_sdZy7qXVM"
 CHAT_ID = 7186647955
 
@@ -30,7 +38,6 @@ logging.basicConfig(filename='bot.log', level=logging.INFO)
 task_queue = queue.Queue()
 is_working = False
 
-# ==================== STATE MANAGEMENT ====================
 login_state = {
     "waiting_for": None, 
     "number": None, 
@@ -39,7 +46,7 @@ login_state = {
 }
 
 youtube_oauth_state = {
-    "waiting_for": None,   # "code" ya "continue"
+    "waiting_for": None,
     "url": None,
     "code": None,
     "event": threading.Event()
@@ -49,23 +56,20 @@ youtube_oauth_state = {
 @bot.message_handler(commands=['start'])
 def welcome(message):
     yt_status = "✅ Active" if PYTUBEFIX_AVAILABLE else "❌ Not Installed"
+    callback_status = "✅ Supported" if PYTUBEFIX_HAS_CALLBACK else "⚠️ Using fallback"
     bot.reply_to(message, 
         "🤖 **JAZZ UPLOADER BOT**\n\n"
-        f"📺 YouTube: {yt_status}\n"
+        f"📺 YouTube: {yt_status} ({callback_status})\n"
         "🔗 Direct Links: ✅ Active\n"
         "☁️ Jazz Drive: ✅ Active\n\n"
-        "📤 **Send any link to start!**\n"
-        "🔐 Jazz login: `/login`\n"
-        "📊 Status: `/status`")
+        "📤 **Send any link!**\n"
+        "🔐 Jazz login: `/login`")
 
 @bot.message_handler(commands=['status'])
 def check_status(message):
     state = "WORKING ⚠️" if is_working else "IDLE ✅"
     pending = task_queue.qsize()
-    yt_wait = ""
-    if youtube_oauth_state["waiting_for"] == "continue":
-        yt_wait = "\n⏳ Waiting for /continue"
-    bot.reply_to(message, f"📊 **Status**\nState: {state}{yt_wait}\nQueue: {pending}")
+    bot.reply_to(message, f"📊 **Status**\nState: {state}\nQueue: {pending}")
 
 @bot.message_handler(commands=['continue'])
 def continue_youtube(message):
@@ -79,9 +83,9 @@ def continue_youtube(message):
 @bot.message_handler(commands=['login'])
 def start_login(message):
     login_state["waiting_for"] = "number"
-    bot.reply_to(message, "📱 Apna Jazz Number bhejein (03XXXXXXXXX):")
+    bot.reply_to(message, "📱 Apna Jazz Number bhejein:")
 
-# ==================== JAZZ DRIVE LOGIN ====================
+# ==================== JAZZ LOGIN ====================
 @bot.message_handler(func=lambda m: login_state["waiting_for"] == "number")
 def receive_number(message):
     login_state["number"] = message.text.strip()
@@ -118,7 +122,7 @@ def do_jazz_login():
     except Exception as e:
         bot.send_message(CHAT_ID, f"❌ Login error: {str(e)[:100]}")
 
-# ==================== LINK DETECTION ====================
+# ==================== LINK HANDLER ====================
 def is_youtube_link(text):
     return re.search(r'(youtube\.com|youtu\.be)', text) is not None
 
@@ -155,29 +159,46 @@ def worker_loop():
         time.sleep(2)
     is_working = False
 
-# ==================== YOUTUBE DOWNLOAD (DOST WALA METHOD) ====================
+# ==================== YOUTUBE DOWNLOAD ====================
 def process_youtube(url):
     try:
-        bot.send_message(CHAT_ID, "▶️ YouTube link process ho raha hai...")
+        bot.send_message(CHAT_ID, "▶️ Processing YouTube link...")
 
-        def on_auth_code(code, verification_url):
+        if PYTUBEFIX_HAS_CALLBACK:
+            # New version with callback
+            def on_auth_code(code, verification_url):
+                bot.send_message(CHAT_ID,
+                    f"🔐 **LOGIN REQUIRED**\n\n"
+                    f"**URL:** {verification_url}\n"
+                    f"**Code:** `{code}`\n\n"
+                    f"Verify karo, phir `/continue`")
+                
+                youtube_oauth_state["waiting_for"] = "continue"
+                youtube_oauth_state["event"].clear()
+
+            yt = YouTube(
+                url,
+                use_oauth=True,
+                allow_oauth_cache=True,
+                on_oauth_callback=on_auth_code
+            )
+        else:
+            # Fallback for older version
+            bot.send_message(CHAT_ID, "⚠️ Using fallback OAuth method...")
+            yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
+            
+            # Old version prints code to console, we need manual entry
             bot.send_message(CHAT_ID,
-                f"🔐 **LOGIN REQUIRED**\n\n"
-                f"**URL:** {verification_url}\n"
-                f"**Code:** `{code}`\n\n"
-                f"Ye code browser mein dalke verify karo\n"
-                f"Phir `/continue` likho")
+                "🔐 **MANUAL OAUTH REQUIRED**\n\n"
+                "1. Check bot console for code\n"
+                "2. Visit: https://www.youtube.com/oauth\n"
+                "3. Enter code\n"
+                "4. Then /continue")
             
             youtube_oauth_state["waiting_for"] = "continue"
             youtube_oauth_state["event"].clear()
 
-        yt = YouTube(
-            url,
-            use_oauth=True,
-            allow_oauth_cache=True,
-            on_oauth_callback=on_auth_code
-        )
-
+        # Wait if OAuth required
         if youtube_oauth_state["waiting_for"] == "continue":
             youtube_oauth_state["url"] = url
             youtube_oauth_state["event"].wait(timeout=300)
@@ -209,7 +230,11 @@ def callback_handler(call):
 
 def download_youtube(url, chat_id, mode):
     try:
-        yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
+        if PYTUBEFIX_HAS_CALLBACK:
+            yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
+        else:
+            yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
+        
         if mode == "audio":
             stream = yt.streams.get_audio_only()
             out_file = stream.download(output_path=DOWNLOAD_DIR)
@@ -227,7 +252,7 @@ def download_youtube(url, chat_id, mode):
     except Exception as e:
         bot.send_message(chat_id, f"❌ Download error: {str(e)[:100]}")
 
-# ==================== DIRECT LINK DOWNLOAD (AAPKA METHOD) ====================
+# ==================== DIRECT LINK DOWNLOAD ====================
 def process_direct_link(link):
     filename = f"video_{int(time.time())}.mp4"
     filepath = os.path.join(DOWNLOAD_DIR, filename)
@@ -244,7 +269,7 @@ def process_direct_link(link):
     except Exception as e:
         bot.send_message(CHAT_ID, f"❌ Error: {str(e)[:100]}")
 
-# ==================== JAZZ DRIVE UPLOAD (COMMON) ====================
+# ==================== JAZZ DRIVE UPLOAD ====================
 def upload_to_jazzdrive(filepath):
     try:
         bot.send_message(CHAT_ID, "⬆️ Uploading to Jazz Drive...")
@@ -280,10 +305,10 @@ def upload_to_jazzdrive(filepath):
     except Exception as e:
         bot.send_message(CHAT_ID, f"❌ Upload error: {str(e)[:100]}")
 
-# ==================== START BOT ====================
+# ==================== START ====================
 if __name__ == "__main__":
     try:
-        bot.send_message(CHAT_ID, "🟢 **Bot Online!**\n✅ YouTube + Direct Links + Jazz Drive")
+        bot.send_message(CHAT_ID, "🟢 **Bot Online!** (YouTube fallback active)")
     except:
         pass
     bot.polling(non_stop=True)
