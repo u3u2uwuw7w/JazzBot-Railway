@@ -1,224 +1,240 @@
 import os
+import sys
 import time
 import threading
 import queue
-import logging
-import re
 import subprocess
-import sys
+import logging
 import telebot
 from playwright.sync_api import sync_playwright
+from pytubefix import YouTube
 
-# ==================== PYTUBEFIX CHECK ====================
-try:
-    from pytubefix import YouTube
-    from pytubefix.cli import on_progress
-    PYTUBEFIX_AVAILABLE = True
-    # Check callback support
-    import inspect
-    sig = inspect.signature(YouTube.__init__)
-    PYTUBEFIX_HAS_CALLBACK = 'on_oauth_callback' in sig.parameters
-except ImportError:
-    PYTUBEFIX_AVAILABLE = False
-    PYTUBEFIX_HAS_CALLBACK = False
-
-# 🔑 TOKEN DAAL
-TOKEN = "8599854738:AAH330JR9zLBXYvNTONm7HF9q_sdZy7qXVM"
-CHAT_ID = 7186647955
-
-DOWNLOAD_DIR = "downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+# 🔑 APNI DETAILS
+TOKEN = "8485872476:AAGt-C0JKjr6JpLwvIGtGWwMh-sFh0-PsC0" 
+CHAT_ID = 7144917062 
 
 bot = telebot.TeleBot(TOKEN)
-logging.basicConfig(filename='bot.log', level=logging.INFO)
+logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(message)s')
 
 task_queue = queue.Queue()
 is_working = False
 
-login_state = {"waiting_for": None, "number": None, "otp": None, "event": threading.Event()}
-youtube_state = {"waiting_for": None, "url": None, "event": threading.Event()}
+# 🧠 BOT KA NAYA DIMAAG
+login_state = {
+    "waiting_for": None, 
+    "number": None, 
+    "otp": None, 
+    "event": threading.Event()
+}
 
-# ==================== COMMANDS ====================
+# 🚀 YOUTUBE OAUTH CATCHER (Terminal messages ko Telegram par bhejne ke liye)
+class YTOauthCatcher:
+    def __init__(self, bot, chat_id):
+        self.bot = bot
+        self.chat_id = chat_id
+        self.original_stdout = sys.stdout
+        self.msg_sent = False
+
+    def write(self, text):
+        self.original_stdout.write(text)
+        # Agar output mein google device link aaye to Telegram par bhej do
+        if "google.com/device" in text and not self.msg_sent:
+            self.bot.send_message(
+                self.chat_id, 
+                f"⚠️ **YOUTUBE VERIFICATION REQUIRED!** ⚠️\n\n{text.strip()}\n\n👆 **Uper diye gaye Link par jayen aur Code enter karein!** (Bot aapka intezar kar raha hai...)",
+            )
+            self.msg_sent = True
+
+    def flush(self):
+        self.original_stdout.flush()
+
 @bot.message_handler(commands=['start'])
-def start(m):
-    bot.reply_to(m, "🤖 Bot Online! YouTube + Direct Links")
+def welcome(message):
+    bot.reply_to(message, "🤖 **JAZZ 24/7 UPLOADER**\n🟢 **Status:** Online\n📤 **Upload:** YT ya Direct Link bhejein\n🔐 **Login:** `/login` likhein")
 
-@bot.message_handler(commands=['continue'])
-def continue_yt(m):
-    if youtube_state["waiting_for"] == "continue":
-        youtube_state["waiting_for"] = None
-        youtube_state["event"].set()
-        bot.reply_to(m, "✅ Continuing...")
+@bot.message_handler(commands=['status'])
+def check_status(message):
+    state = "WORKING ⚠️" if is_working else "IDLE ✅"
+    bot.reply_to(message, f"📊 **System Status**\nState: {state}\nPending Files: {task_queue.qsize()}")
 
-# ==================== LINK HANDLER ====================
-def is_youtube(text):
-    return re.search(r'(youtube\.com|youtu\.be)', text) is not None
-
-@bot.message_handler(func=lambda m: m.text and m.text.startswith("http"))
-def handle(m):
-    link = m.text.strip()
-    if is_youtube(link) and PYTUBEFIX_AVAILABLE:
-        task_queue.put(("youtube", link))
-        bot.reply_to(m, f"✅ YouTube added! Position: {task_queue.qsize()}")
-    else:
-        task_queue.put(("direct", link))
-        bot.reply_to(m, f"✅ Direct added! Position: {task_queue.qsize()}")
-    
-    global is_working
-    if not is_working:
-        threading.Thread(target=worker).start()
-
-def worker():
-    global is_working
-    is_working = True
-    while not task_queue.empty():
-        t, d = task_queue.get()
-        try:
-            if t == "youtube":
-                process_youtube(d)
-            else:
-                process_direct(d)
-        except Exception as e:
-            bot.send_message(CHAT_ID, f"❌ Error: {e}")
-        time.sleep(2)
-    is_working = False
-
-# ==================== YOUTUBE ====================
-def process_youtube(url):
-    try:
-        bot.send_message(CHAT_ID, "▶️ Processing...")
-
-        if PYTUBEFIX_HAS_CALLBACK:
-            def auth_cb(code, ver_url):
-                bot.send_message(CHAT_ID,
-                    f"🔐 **LOGIN CODE**\n\nURL: {ver_url}\nCode: `{code}`\n\nVerify karo, phir /continue")
-                youtube_state["waiting_for"] = "continue"
-                youtube_state["event"].clear()
-            
-            yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_oauth_callback=auth_cb)
-        else:
-            bot.send_message(CHAT_ID, "⚠️ Old pytubefix. Send /continue after verifying.")
-            yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
-            youtube_state["waiting_for"] = "continue"
-            youtube_state["event"].clear()
-
-        if youtube_state["waiting_for"] == "continue":
-            youtube_state["event"].wait(300)
-            if youtube_state["waiting_for"]:
-                bot.send_message(CHAT_ID, "❌ Timeout")
-                return
-
-        bot.send_message(CHAT_ID, f"✅ {yt.title}")
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.row(
-            telebot.types.InlineKeyboardButton("🎬 Video", callback_data=f"v_{url}"),
-            telebot.types.InlineKeyboardButton("🎵 Audio", callback_data=f"a_{url}")
-        )
-        bot.send_message(CHAT_ID, "Choose:", reply_markup=markup)
-    except Exception as e:
-        bot.send_message(CHAT_ID, f"❌ {e}")
-
-@bot.callback_query_handler(func=lambda call: True)
-def cb(call):
-    if call.data.startswith("v_"):
-        threading.Thread(target=dl_youtube, args=(call.data[2:], call.message.chat.id, "video")).start()
-    elif call.data.startswith("a_"):
-        threading.Thread(target=dl_youtube, args=(call.data[2:], call.message.chat.id, "audio")).start()
-
-def dl_youtube(url, chat_id, mode):
-    try:
-        yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
-        if mode == "audio":
-            f = yt.streams.get_audio_only().download(DOWNLOAD_DIR)
-            base, _ = os.path.splitext(f)
-            new = base + ".mp3"
-            os.rename(f, new)
-            filename = new
-        else:
-            filename = yt.streams.get_highest_resolution().download(DOWNLOAD_DIR)
-        
-        size = os.path.getsize(filename) / (1024*1024)
-        bot.send_message(chat_id, f"✅ Downloaded {size:.1f}MB")
-        upload_jazz(filename)
-    except Exception as e:
-        bot.send_message(chat_id, f"❌ {e}")
-
-# ==================== DIRECT LINK ====================
-def process_direct(link):
-    name = f"video_{int(time.time())}.mp4"
-    path = os.path.join(DOWNLOAD_DIR, name)
-    os.system(f'aria2c -x 16 -d "{DOWNLOAD_DIR}" -o "{name}" "{link}"')
-    if os.path.exists(path):
-        size = os.path.getsize(path) / (1024*1024)
-        bot.send_message(CHAT_ID, f"✅ Downloaded {size:.1f}MB")
-        upload_jazz(path)
-
-# ==================== JAZZ UPLOAD ====================
-def upload_jazz(path):
-    try:
-        bot.send_message(CHAT_ID, "⬆️ Uploading...")
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            ctx = browser.new_context(storage_state="state.json" if os.path.exists("state.json") else None)
-            page = ctx.new_page()
-            page.goto("https://cloud.jazzdrive.com.pk/")
-            time.sleep(5)
-            if page.locator("text='Sign Up/In'").is_visible():
-                bot.send_message(CHAT_ID, "⚠️ Login expired. Use /login")
-                return
-            with page.expect_file_chooser() as fc:
-                page.click("text='Upload files'")
-            fc.value.set_files(os.path.abspath(path))
-            time.sleep(5)
-            bot.send_message(CHAT_ID, f"✅ Uploaded {os.path.basename(path)}")
-            os.remove(path)
-            browser.close()
-    except Exception as e:
-        bot.send_message(CHAT_ID, f"❌ Upload error: {e}")
-
-# ==================== JAZZ LOGIN ====================
+# --- 🔐 JAZZ DRIVE LOGIN SYSTEM ---
 @bot.message_handler(commands=['login'])
-def login(m):
+def start_login(message):
     login_state["waiting_for"] = "number"
-    bot.reply_to(m, "📱 Jazz number do:")
+    bot.reply_to(message, "📱 Apna Jazz Number bhejein (Jaise: 03001234567):")
 
 @bot.message_handler(func=lambda m: login_state["waiting_for"] == "number")
-def get_num(m):
-    login_state["number"] = m.text
+def receive_number(message):
+    login_state["number"] = message.text.strip()
     login_state["waiting_for"] = "otp"
-    bot.reply_to(m, "⏳ OTP bheja, ab OTP do:")
-    threading.Thread(target=jazz_login).start()
+    bot.reply_to(message, f"⏳ Number `{login_state['number']}` Jazz Drive par daal raha hoon. OTP ka wait karein...")
+    threading.Thread(target=do_playwright_login).start()
 
 @bot.message_handler(func=lambda m: login_state["waiting_for"] == "otp")
-def get_otp(m):
-    login_state["otp"] = m.text
+def receive_otp(message):
+    login_state["otp"] = message.text.strip()
     login_state["waiting_for"] = None
     login_state["event"].set()
 
-def jazz_login():
+def do_playwright_login():
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto("https://cloud.jazzdrive.com.pk/")
-            page.fill("input[type='text']", login_state["number"])
-            page.click("button:has-text('Get OTP')")
-            bot.send_message(CHAT_ID, "📩 OTP bheja!")
-            login_state["event"].wait(60)
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+            context = browser.new_context()
+            page = context.new_page()
+            
+            bot.send_message(CHAT_ID, "🌐 Website khol raha hoon...")
+            page.goto("https://cloud.jazzdrive.com.pk/", timeout=60000)
+            time.sleep(3)
+            
+            page.fill("input[type='text'], input[placeholder*='03']", login_state["number"])
+            page.click("button:has-text('Subscribe'), button:has-text('Login'), button:has-text('Get OTP')")
+            
+            bot.send_message(CHAT_ID, "📩 OTP bhej diya gaya hai! Jaldi se yahan OTP likh kar reply karein:")
+            
+            login_state["event"].clear()
+            login_state["event"].wait(timeout=60) 
+            
             if login_state["otp"]:
-                page.fill("input[type='text']", login_state["otp"])
-                page.click("button:has-text('Verify')")
+                bot.send_message(CHAT_ID, "🔑 OTP website par daal raha hoon...")
+                page.locator("input").nth(0).click() 
+                page.keyboard.type(login_state["otp"])
                 time.sleep(3)
-                browser.contexts[0].storage_state(path="state.json")
-                bot.send_message(CHAT_ID, "🎉 Login success!")
+                
+                try:
+                    page.click("button:has-text('Verify'), button:has-text('Submit')", timeout=3000)
+                except:
+                    pass 
+                
+                time.sleep(5)
+                context.storage_state(path="state.json")
+                bot.send_message(CHAT_ID, "🎉 **LOGIN SUCCESSFUL!** 🎉\nBot ne naya VIP Pass khud bana kar save kar liya hai. Ab apne Links bhejein!")
+            else:
+                bot.send_message(CHAT_ID, "❌ Timeout! Dobara `/login` likhein.")
+                login_state["waiting_for"] = None
             browser.close()
     except Exception as e:
-        bot.send_message(CHAT_ID, f"❌ {e}")
+        bot.send_message(CHAT_ID, f"❌ Login Error.\n`{str(e)[:150]}`")
+        login_state["waiting_for"] = None
 
-# ==================== START ====================
-if __name__ == "__main__":
+# --- 📥 UPLOAD SYSTEM (YouTube + Direct Links) ---
+@bot.message_handler(func=lambda m: login_state["waiting_for"] is None and m.text.startswith("http"))
+def handle_link(message):
+    task_queue.put(message.text.strip())
+    bot.reply_to(message, f"✅ Added to Queue! Position: {task_queue.qsize()}")
+    global is_working
+    if not is_working:
+        threading.Thread(target=worker_loop).start()
+
+def worker_loop():
+    global is_working
+    is_working = True
+    while not task_queue.empty():
+        process_task(task_queue.get())
+    is_working = False
+
+def process_task(link):
+    filename = f"video_{int(time.time())}.mp4"
     try:
-        bot.send_message(CHAT_ID, "🟢 Bot Online!")
-    except:
-        pass
-    bot.polling()
+        # 🟢 YOUTUBE LOGIC
+        if "youtube.com" in link or "youtu.be" in link:
+            bot.send_message(CHAT_ID, "📺 YouTube Link detect hua! Processing shuru...")
+            
+            # Print output ko Telegram par bhejney ke liye interceptor lagaya
+            old_stdout = sys.stdout
+            sys.stdout = YTOauthCatcher(bot, CHAT_ID)
+            
+            try:
+                yt = YouTube(link, use_oauth=True, allow_oauth_cache=True)
+                bot.send_message(CHAT_ID, f"⬇️ Downloading YT Video: {yt.title}")
+                ys = yt.streams.get_highest_resolution()
+                ys.download(filename=filename)
+            except Exception as e:
+                bot.send_message(CHAT_ID, f"❌ YouTube Error: {e}")
+                return
+            finally:
+                sys.stdout = old_stdout # Print system ko wapas normal kar diya
+                
+        # 🟢 DIRECT LINK LOGIC
+        else:
+            bot.send_message(CHAT_ID, "🌍 Direct Link Downloading...")
+            os.system(f'aria2c -x 16 -s 16 -k 1M -o "{filename}" "{link}"')
+        
+        if not os.path.exists(filename):
+            bot.send_message(CHAT_ID, "❌ Download Failed! File nahi mili.")
+            return
+
+        # 🟢 JAZZ DRIVE UPLOAD LOGIC
+        bot.send_message(CHAT_ID, "⬆️ Checking Jazz Drive Login...")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+            context = browser.new_context(storage_state="state.json" if os.path.exists("state.json") else None)
+            page = context.new_page()
+            
+            try:
+                page.goto("https://cloud.jazzdrive.com.pk/", timeout=90000)
+                time.sleep(5)
+
+                if page.locator("text='Sign Up/In'").is_visible() or page.locator("input[type='password']").is_visible():
+                    bot.send_message(CHAT_ID, "⚠️ **Jazz Drive Login Expired!** ⚠️\nNaya login karne ke liye Telegram mein `/login` likhein.")
+                    browser.close()
+                    return 
+
+                bot.send_message(CHAT_ID, "✅ Login theek hai! Uploading shuru...")
+                
+                try: page.click("button:has-text('Accept All')", timeout=3000)
+                except: pass
+
+                try: page.evaluate("document.querySelectorAll('header button').forEach(b => { if(b.innerHTML.includes('svg')) b.click(); })")
+                except: pass
+                time.sleep(2)
+                
+                try:
+                    with page.expect_file_chooser(timeout=10000) as fc_info:
+                        page.click("text='Upload files'")
+                    file_chooser = fc_info.value
+                    file_chooser.set_files(os.path.abspath(filename))
+                except:
+                    page.set_input_files("input[type='file']", os.path.abspath(filename), timeout=15000)
+                
+                time.sleep(2)
+                
+                try:
+                    page.click("button:has-text('Yes'), button:has-text('YES'), button:has-text('yes')", timeout=4000)
+                    time.sleep(1)
+                except: pass
+                
+                bot.send_message(CHAT_ID, "📁 File website par lag gayi hai. Har 1 minute baad progress update aayegi! ⏳")
+                
+                upload_done = False
+                for i in range(25): 
+                    try:
+                        page.wait_for_selector("text=Uploads completed", timeout=60000)
+                        upload_done = True
+                        break 
+                    except:
+                        try:
+                            page.screenshot(path="progress.png")
+                            bot.send_photo(CHAT_ID, open("progress.png", "rb"), caption=f"⏳ Upload Progress: {i+1} min...")
+                        except: pass
+                
+                if upload_done:
+                    bot.send_message(CHAT_ID, f"🎉 SUCCESS! Video Jazz Drive par upload ho gayi hai.")
+                else:
+                    bot.send_message(CHAT_ID, "⚠️ 25 minute timeout! Upload poora nahi hua.")
+                
+            except Exception as e:
+                bot.send_message(CHAT_ID, f"❌ Upload Error.\n`{str(e)[:150]}`")
+            finally:
+                browser.close()
+                
+    except Exception as e:
+        logging.error(f"System Error: {e}")
+    finally:
+        if os.path.exists(filename): os.remove(filename)
+
+try: bot.send_message(CHAT_ID, "🟢 **System Online!**\nWaiting for Links... 🚀")
+except: pass
+
+bot.polling(non_stop=True)
+                
