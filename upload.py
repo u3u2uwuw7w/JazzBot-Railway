@@ -7,11 +7,14 @@ import re
 import telebot
 from playwright.sync_api import sync_playwright
 import yt_dlp
-import json
 
 # 🔑 APNE NAYE DETAILS DALO
 TOKEN = "8599854738:AAH330JR9zLBXYvNTONm7HF9q_sdZy7qXVM"
 CHAT_ID = 7186647955
+
+# 📁 Download folder
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 bot = telebot.TeleBot(TOKEN)
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -39,7 +42,7 @@ youtube_auth_state = {
 # ---------------------------
 @bot.message_handler(commands=['start'])
 def welcome(message):
-    bot.reply_to(message, "🤖 **JAZZ 24/7 UPLOADER**\n🟢 **Status:** Online\n📤 **Upload:** Link bhejein\n🔐 **Login:** `/login` likhein\n▶️ **YouTube:** YouTube link bhejein (TV method)")
+    bot.reply_to(message, "🤖 **JAZZ 24/7 UPLOADER**\n🟢 **Status:** Online\n📤 **Upload:** Link bhejein\n🔐 **Login:** `/login` likhein\n▶️ **YouTube:** YouTube link ya playlist bhejein\n📁 **Folder:** Har playlist ke liye alag folder banega (`downloads/`)")
 
 @bot.message_handler(commands=['status'])
 def check_status(message):
@@ -158,11 +161,11 @@ def worker_loop():
     is_working = False
 
 # ---------------------------
-# YOUTUBE PROCESSING (TV METHOD - FIXED)
+# YOUTUBE PROCESSING (WITH PLAYLIST AND FOLDER SUPPORT)
 # ---------------------------
 def process_youtube(url):
     try:
-        bot.send_message(CHAT_ID, f"▶️ YouTube video process kar raha hoon...")
+        bot.send_message(CHAT_ID, f"▶️ YouTube video/playlist process kar raha hoon...")
 
         # Pehle check karein cookies exist karti hain ya nahi
         cookies_exist = os.path.exists(youtube_auth_state["cookies_file"])
@@ -195,7 +198,6 @@ def process_youtube(url):
                     # User ne continue kar diya, ab cookies save karo
                     bot.send_message(CHAT_ID, "🔄 Cookies save kar raha hoon...")
                     time.sleep(5)  # Thoda intezar ke YouTube cookies save ho jayein
-                    # Yahan cookies automatically save ho jayengi jab hum dobara yt-dlp chalayenge
                 else:
                     bot.send_message(CHAT_ID, "❌ Timeout! Dobara YouTube link bhejein.")
                     return
@@ -203,12 +205,62 @@ def process_youtube(url):
                 bot.send_message(CHAT_ID, "❌ TV activation code generate nahi ho saka.")
                 return
         
-        # Ab download karo (cookies exist karti hain ya abhi save hui hain)
-        bot.send_message(CHAT_ID, "⬇️ YouTube video download ho raha hai...")
+        # Ab info extract karein ke ye playlist hai ya single video
+        bot.send_message(CHAT_ID, "🔍 Link ki information le raha hoon...")
         
+        ydl_opts_info = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,  # Sirf info, download nahi
+            'cookiefile': youtube_auth_state["cookies_file"] if os.path.exists(youtube_auth_state["cookies_file"]) else None,
+            'extractor_args': {'youtube': 'player_client=android_tv'},
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            # Check if it's a playlist
+            if 'entries' in info:  # Yeh playlist hai
+                playlist_title = info.get('title', 'Untitled Playlist')
+                # Sanitize folder name
+                safe_title = re.sub(r'[<>:"/\\|?*]', '_', playlist_title)
+                playlist_folder = os.path.join(DOWNLOAD_DIR, safe_title)
+                os.makedirs(playlist_folder, exist_ok=True)
+                
+                video_count = len(info['entries'])
+                bot.send_message(CHAT_ID, f"📑 Playlist mili: **{playlist_title}**\nTotal videos: {video_count}\n\nSab videos **{playlist_folder}** folder mein save hongi. Har video ke baad progress batata rahunga.")
+                
+                # Har video ko process karo
+                for idx, entry in enumerate(info['entries'], start=1):
+                    video_url = entry['url']  # yt-dlp flat mode mein url deta hai
+                    video_title = entry.get('title', f'Video {idx}')
+                    
+                    bot.send_message(CHAT_ID, f"▶️ **({idx}/{video_count})** Downloading: {video_title}")
+                    
+                    # Har video ke liye download aur upload
+                    success = download_single_youtube_video(video_url, playlist_folder, idx, video_count)
+                    if not success:
+                        bot.send_message(CHAT_ID, f"⚠️ Video {idx} fail ho gayi, agli par ja raha hoon.")
+                    
+                    # Thoda wait karein rate limiting se bachne ke liye
+                    time.sleep(2)
+                
+                bot.send_message(CHAT_ID, f"🎉 Playlist **{playlist_title}** complete! Total {video_count} videos process hui.")
+            else:
+                # Single video
+                bot.send_message(CHAT_ID, "🎬 Single video download ho rahi hai...")
+                download_single_youtube_video(url, DOWNLOAD_DIR)
+                
+    except Exception as e:
+        logging.error(f"YouTube error: {e}")
+        bot.send_message(CHAT_ID, f"❌ YouTube error: {str(e)[:200]}")
+
+def download_single_youtube_video(url, folder_path, index=None, total=None):
+    """Ek YouTube video download karo aur upload karo. Playlist ke andar bhi use ho sakta hai."""
+    try:
         ydl_opts = {
             'format': 'best[height<=720]',
-            'outtmpl': '%(title)s.%(ext)s',
+            'outtmpl': os.path.join(folder_path, '%(title)s.%(ext)s'),
             'cookiefile': youtube_auth_state["cookies_file"] if os.path.exists(youtube_auth_state["cookies_file"]) else None,
             'extractor_args': {'youtube': 'player_client=android_tv'},
             'quiet': True,
@@ -219,23 +271,26 @@ def process_youtube(url):
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             
-            # Extension fix
+            # Extension fix (agar prepared filename exist na kare)
             if not os.path.exists(filename):
-                # Kuch videos mein extension alag hoti hai
-                for file in os.listdir('.'):
+                for file in os.listdir(folder_path):
                     if file.startswith(info['title']) and file.endswith(('.mp4', '.webm', '.mkv')):
-                        filename = file
+                        filename = os.path.join(folder_path, file)
                         break
         
         if os.path.exists(filename):
-            bot.send_message(CHAT_ID, f"✅ Download complete: {filename}")
-            upload_to_jazzdrive(filename)
+            # Playlist progress ke liye
+            prefix = f"({index}/{total}) " if index and total else ""
+            bot.send_message(CHAT_ID, f"{prefix}✅ Download complete: {os.path.basename(filename)}")
+            upload_to_jazzdrive(filename)  # ab full path de rahe hain
+            return True
         else:
             bot.send_message(CHAT_ID, "❌ Download failed: file not found.")
-            
+            return False
     except Exception as e:
-        logging.error(f"YouTube error: {e}")
-        bot.send_message(CHAT_ID, f"❌ YouTube error: {str(e)[:200]}")
+        logging.error(f"Single video download error: {e}")
+        bot.send_message(CHAT_ID, f"❌ Video download error: {str(e)[:200]}")
+        return False
 
 def get_tv_activation_code():
     """Playwright se YouTube TV ka activation code hasil karein"""
@@ -267,29 +322,31 @@ def get_tv_activation_code():
         return None
 
 # ---------------------------
-# DIRECT LINK DOWNLOAD (ARIA2)
+# DIRECT LINK DOWNLOAD (ARIA2) WITH FOLDER
 # ---------------------------
 def process_direct_link(link):
     filename = f"video_{int(time.time())}.mp4"
+    filepath = os.path.join(DOWNLOAD_DIR, filename)
     try:
         bot.send_message(CHAT_ID, "🌍 Link Downloading...")
-        os.system(f'aria2c -x 16 -s 16 -k 1M -o "{filename}" "{link}"')
+        # aria2c ko output path dena
+        os.system(f'aria2c -x 16 -s 16 -k 1M -d "{DOWNLOAD_DIR}" -o "{filename}" "{link}"')
         
-        if not os.path.exists(filename):
+        if not os.path.exists(filepath):
             bot.send_message(CHAT_ID, "❌ Download Failed!")
             return
 
-        upload_to_jazzdrive(filename)
+        upload_to_jazzdrive(filepath)
     except Exception as e:
         logging.error(f"Direct download error: {e}")
         bot.send_message(CHAT_ID, f"❌ Download error: {str(e)[:200]}")
     finally:
-        if os.path.exists(filename): os.remove(filename)
+        if os.path.exists(filepath): os.remove(filepath)
 
 # ---------------------------
-# JAZZ DRIVE UPLOAD (PEHLE JAISA)
+# JAZZ DRIVE UPLOAD (MODIFIED FOR FULL PATH)
 # ---------------------------
-def upload_to_jazzdrive(filename):
+def upload_to_jazzdrive(filepath):
     try:
         bot.send_message(CHAT_ID, "⬆️ Checking Jazz Drive Login...")
         with sync_playwright() as p:
@@ -325,9 +382,9 @@ def upload_to_jazzdrive(filename):
                     with page.expect_file_chooser(timeout=10000) as fc_info:
                         page.click("text='Upload files'")
                     file_chooser = fc_info.value
-                    file_chooser.set_files(os.path.abspath(filename))
+                    file_chooser.set_files(os.path.abspath(filepath))
                 except:
-                    page.set_input_files("input[type='file']", os.path.abspath(filename), timeout=15000)
+                    page.set_input_files("input[type='file']", os.path.abspath(filepath), timeout=15000)
                 
                 time.sleep(2)
                 
@@ -355,7 +412,7 @@ def upload_to_jazzdrive(filename):
                         except: pass
                 
                 if upload_done:
-                    bot.send_message(CHAT_ID, f"🎉 SUCCESS! {filename} mukammal upload ho gayi hai.")
+                    bot.send_message(CHAT_ID, f"🎉 SUCCESS! {os.path.basename(filepath)} mukammal upload ho gayi hai.")
                 else:
                     bot.send_message(CHAT_ID, "⚠️ 25 minute timeout! Upload poora nahi hua.")
                 
@@ -370,14 +427,12 @@ def upload_to_jazzdrive(filename):
                 browser.close()
     except Exception as e:
         logging.error(f"System Error: {e}")
-    finally:
-        if os.path.exists(filename): os.remove(filename)
 
 # ---------------------------
 # START BOT
 # ---------------------------
 try: 
-    bot.send_message(CHAT_ID, "🟢 **System Online!**\nYouTube TV code support enabled! 🚀")
+    bot.send_message(CHAT_ID, "🟢 **System Online!**\n✅ YouTube Playlist + Folder Support enabled!\n📁 Files saved in `downloads/` folder.")
 except: 
     pass
 
