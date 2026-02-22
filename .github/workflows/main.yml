@@ -22,7 +22,7 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install playwright pyTelegramBotAPI
           
-          # Force install latest pytubefix from GitHub
+          # 🔥 Purana hata ke naya install
           python3 -m pip uninstall -y pytubefix || true
           python3 -m pip install git+https://github.com/JuanBindez/pytubefix.git --force-reinstall
           
