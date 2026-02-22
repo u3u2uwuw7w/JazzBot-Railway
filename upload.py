@@ -7,9 +7,10 @@ import re
 import telebot
 from playwright.sync_api import sync_playwright
 import yt_dlp
+import json
 
-# 🔑 اپنی تفصیلات
-TOKEN = "8599854738:AAH330JR9zLBXYvNTONm7HF9q_sdZy7qXVM" 
+# 🔑 APNE NAYE DETAILS DALO
+TOKEN = "8599854738:AAH330JR9zLBXYvNTONm7HF9q_sdZy7qXVM"
 CHAT_ID = 7186647955
 
 bot = telebot.TeleBot(TOKEN)
@@ -18,7 +19,6 @@ logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s 
 task_queue = queue.Queue()
 is_working = False
 
-# Jazz Drive لاگ ان کا سٹیٹ
 login_state = {
     "waiting_for": None, 
     "number": None, 
@@ -26,16 +26,16 @@ login_state = {
     "event": threading.Event()
 }
 
-# یوٹیوب تصدیق کا سٹیٹ
 youtube_auth_state = {
-    "waiting_for": None,        # "continue" or None
+    "waiting_for": None,        # "code" ya "continue"
     "url": None,
     "cookies_file": "youtube_cookies.txt",
-    "event": threading.Event()
+    "event": threading.Event(),
+    "temp_code": None
 }
 
 # ---------------------------
-# کمانڈ ہینڈلرز
+# COMMANDS
 # ---------------------------
 @bot.message_handler(commands=['start'])
 def welcome(message):
@@ -45,7 +45,11 @@ def welcome(message):
 def check_status(message):
     state = "WORKING ⚠️" if is_working else "IDLE ✅"
     pending = task_queue.qsize()
-    yt_wait = " (YouTube verification ka intezar)" if youtube_auth_state["waiting_for"] else ""
+    yt_wait = ""
+    if youtube_auth_state["waiting_for"] == "code":
+        yt_wait = " (YouTube code ka intezar)"
+    elif youtube_auth_state["waiting_for"] == "continue":
+        yt_wait = " (YouTube verification ka intezar)"
     bot.reply_to(message, f"📊 **System Status**\nState: {state}{yt_wait}\nPending Files: {pending}")
 
 @bot.message_handler(commands=['login'])
@@ -63,7 +67,7 @@ def continue_youtube(message):
         bot.reply_to(message, "❌ No pending YouTube verification.")
 
 # ---------------------------
-# Jazz Drive لاگ ان کا بہاؤ
+# JAZZ LOGIN (PEHLE JAISA)
 # ---------------------------
 @bot.message_handler(func=lambda m: login_state["waiting_for"] == "number")
 def receive_number(message):
@@ -124,7 +128,7 @@ def do_playwright_login():
         login_state["waiting_for"] = None
 
 # ---------------------------
-# یوٹیوب لنک پروسیسنگ
+# YOUTUBE LINK DETECTION
 # ---------------------------
 def is_youtube_link(text):
     youtube_regex = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'
@@ -134,7 +138,6 @@ def is_youtube_link(text):
 def handle_link(message):
     link = message.text.strip()
     if is_youtube_link(link):
-        # یوٹیوب لنک کو خاص طریقے سے ہینڈل کریں
         task_queue.put(("youtube", link))
     else:
         task_queue.put(("direct", link))
@@ -155,95 +158,116 @@ def worker_loop():
     is_working = False
 
 # ---------------------------
-# یوٹیوب ڈاؤنلوڈ (TV method)
+# YOUTUBE PROCESSING (TV METHOD - FIXED)
 # ---------------------------
 def process_youtube(url):
     try:
         bot.send_message(CHAT_ID, f"▶️ YouTube video process kar raha hoon...")
 
-        # yt-dlp آپشنز
+        # Pehle check karein cookies exist karti hain ya nahi
+        cookies_exist = os.path.exists(youtube_auth_state["cookies_file"])
+        
+        if not cookies_exist:
+            # Naya TV activation code lene ke liye
+            bot.send_message(CHAT_ID, "⚠️ YouTube age verification required. TV activation code generate kar raha hoon...")
+            
+            # Playwright se TV code hasil karein
+            code = get_tv_activation_code()
+            
+            if code:
+                youtube_auth_state["temp_code"] = code
+                youtube_auth_state["waiting_for"] = "continue"
+                youtube_auth_state["url"] = url
+                
+                bot.send_message(
+                    CHAT_ID, 
+                    f"🔐 **TV ACTIVATION CODE:** `{code}`\n\n"
+                    f"1. Ye website kholo: https://www.youtube.com/tv/activate\n"
+                    f"2. Yeh code `{code}` wahan enter karo\n"
+                    f"3. Verify karne ke baad yahan `/continue` likho"
+                )
+                
+                # Intezar karein jab tak user /continue na bheje
+                youtube_auth_state["event"].clear()
+                youtube_auth_state["event"].wait(timeout=300)  # 5 minute wait
+                
+                if youtube_auth_state["waiting_for"] is None:
+                    # User ne continue kar diya, ab cookies save karo
+                    bot.send_message(CHAT_ID, "🔄 Cookies save kar raha hoon...")
+                    time.sleep(5)  # Thoda intezar ke YouTube cookies save ho jayein
+                    # Yahan cookies automatically save ho jayengi jab hum dobara yt-dlp chalayenge
+                else:
+                    bot.send_message(CHAT_ID, "❌ Timeout! Dobara YouTube link bhejein.")
+                    return
+            else:
+                bot.send_message(CHAT_ID, "❌ TV activation code generate nahi ho saka.")
+                return
+        
+        # Ab download karo (cookies exist karti hain ya abhi save hui hain)
+        bot.send_message(CHAT_ID, "⬇️ YouTube video download ho raha hai...")
+        
         ydl_opts = {
-            'format': 'best[height<=720]',  # 720p تک کی بہترین ویڈیو
+            'format': 'best[height<=720]',
             'outtmpl': '%(title)s.%(ext)s',
             'cookiefile': youtube_auth_state["cookies_file"] if os.path.exists(youtube_auth_state["cookies_file"]) else None,
-            'extractor_args': {'youtube': 'player_client=android_tv'},  # TV client
+            'extractor_args': {'youtube': 'player_client=android_tv'},
             'quiet': True,
             'no_warnings': True,
         }
-
-        # پہلے چیک کریں کہ تصدیق درکار ہے یا نہیں
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
-                # صرف معلومات حاصل کریں، ڈاؤنلوڈ نہ کریں
-                info = ydl.extract_info(url, download=False)
-                # اگر یہاں تک پہنچ گئے تو تصدیق درکار نہیں
-                bot.send_message(CHAT_ID, "✅ YouTube authentication OK, downloading...")
-            except yt_dlp.utils.DownloadError as e:
-                error_str = str(e)
-                if "Sign in to confirm your age" in error_str or "Confirm your age" in error_str or "Sign in" in error_str:
-                    # تصدیق درکار ہے
-                    bot.send_message(CHAT_ID, "⚠️ YouTube age verification required. Generating TV login link...")
-                    
-                    # TV login لنک حاصل کرنے کے لیے yt-dlp کو خاص طریقے سے چلائیں
-                    # یہ کوڈ yt-dlp کے TV براؤزر ایمولیشن کو استعمال کرے گا
-                    # لیکن yt-dlp خود بخود لنک اور کوڈ دے سکتا ہے اگر ہم extractor_args میں proper TV client دیں
-                    
-                    # بہتر طریقہ: yt-dlp کو TV client کے ساتھ چلائیں اور وہ خود بخود تصدیق کا طریقہ بتائے گا
-                    # ہم یہاں پر ایک آسان طریقہ استعمال کریں گے: صارف کو دستی طور پر TV کوڈ داخل کرنے کا کہیں
-                    
-                    bot.send_message(CHAT_ID, "🔐 Please visit: https://www.youtube.com/tv/activate and enter the code below.")
-                    
-                    # yt-dlp TV کوڈ حاصل کرنے کے لیے
-                    # ہم yt-dlp کو ایک عارضی کمانڈ سے چلا کر کوڈ حاصل کر سکتے ہیں
-                    # لیکن یہ تھوڑا پیچیدہ ہے۔ آسان طریقہ: صارف کو خود براؤزر میں کھولنے کا کہیں اور پھر /continue بھیجیں
-                    
-                    youtube_auth_state["waiting_for"] = "continue"
-                    youtube_auth_state["url"] = url
-                    
-                    # صارف کو بتائیں کہ تصدیق مکمل کرنے کے بعد /continue بھیجے
-                    bot.send_message(CHAT_ID, "✅ TV activation page open karein, code enter karein, phir yahan /continue likhein.")
-                    
-                    # انتظار کریں جب تک صارف /continue نہ بھیجے
-                    youtube_auth_state["event"].clear()
-                    youtube_auth_state["event"].wait(timeout=300)  # 5 منٹ انتظار
-                    
-                    if youtube_auth_state["waiting_for"] is None:
-                        # صارف نے /continue بھیج دیا
-                        bot.send_message(CHAT_ID, "🔄 Ab dobara download try kar raha hoon...")
-                        # دوبارہ yt-dlp چلائیں، اب کوکیز محفوظ ہو جائیں گی
-                        ydl_opts['cookiefile'] = youtube_auth_state["cookies_file"]
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
-                            info = ydl2.extract_info(url, download=True)
-                            filename = ydl2.prepare_filename(info)
-                    else:
-                        bot.send_message(CHAT_ID, "❌ Timeout! YouTube verification complete nahi hui.")
-                        return
-                else:
-                    # کوئی اور خرابی
-                    bot.send_message(CHAT_ID, f"❌ YouTube error: {error_str[:200]}")
-                    return
-
-        # اگر یہاں پہنچ گئے تو ڈاؤنلوڈ ہو چکا ہوگا
-        # فائل کا نام معلوم کریں
-        filename = None
-        for file in os.listdir('.'):
-            if file.endswith(('.mp4', '.webm', '.mkv')) and not file.startswith('video_'):
-                filename = file
-                break
         
-        if filename and os.path.exists(filename):
-            bot.send_message(CHAT_ID, f"✅ YouTube video downloaded: {filename}")
-            # اب اس فائل کو جاز ڈرائیو پر اپ لوڈ کریں
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            
+            # Extension fix
+            if not os.path.exists(filename):
+                # Kuch videos mein extension alag hoti hai
+                for file in os.listdir('.'):
+                    if file.startswith(info['title']) and file.endswith(('.mp4', '.webm', '.mkv')):
+                        filename = file
+                        break
+        
+        if os.path.exists(filename):
+            bot.send_message(CHAT_ID, f"✅ Download complete: {filename}")
             upload_to_jazzdrive(filename)
         else:
             bot.send_message(CHAT_ID, "❌ Download failed: file not found.")
             
     except Exception as e:
-        logging.error(f"YouTube process error: {e}")
-        bot.send_message(CHAT_ID, f"❌ YouTube processing error: {str(e)[:200]}")
+        logging.error(f"YouTube error: {e}")
+        bot.send_message(CHAT_ID, f"❌ YouTube error: {str(e)[:200]}")
+
+def get_tv_activation_code():
+    """Playwright se YouTube TV ka activation code hasil karein"""
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+            context = browser.new_context()
+            page = context.new_page()
+            
+            bot.send_message(CHAT_ID, "🌐 YouTube TV page khul raha hai...")
+            page.goto("https://www.youtube.com/tv/activate", timeout=60000)
+            time.sleep(5)
+            
+            # Code selector - YouTube TV par code dikhta hai
+            code_element = page.locator("code, .code, .activation-code, .setup-code").first
+            if code_element.is_visible():
+                code = code_element.text_content().strip()
+                browser.close()
+                return code
+            
+            # Agar code na mile to screenshot le kar dekhein
+            page.screenshot(path="tv_code.png")
+            bot.send_photo(CHAT_ID, open("tv_code.png", "rb"), caption="Code nahi mila, manual check karein:")
+            
+            browser.close()
+            return None
+    except Exception as e:
+        logging.error(f"TV code error: {e}")
+        return None
 
 # ---------------------------
-# ڈائریکٹ لنک ڈاؤنلوڈ (پہلے والا طریقہ)
+# DIRECT LINK DOWNLOAD (ARIA2)
 # ---------------------------
 def process_direct_link(link):
     filename = f"video_{int(time.time())}.mp4"
@@ -263,7 +287,7 @@ def process_direct_link(link):
         if os.path.exists(filename): os.remove(filename)
 
 # ---------------------------
-# جاز ڈرائیو اپ لوڈ (مشترکہ)
+# JAZZ DRIVE UPLOAD (PEHLE JAISA)
 # ---------------------------
 def upload_to_jazzdrive(filename):
     try:
@@ -290,13 +314,13 @@ def upload_to_jazzdrive(filename):
                     time.sleep(1)
                 except: pass
 
-                # Main icon par click karna
+                # Main icon par click
                 try: 
                     page.evaluate("document.querySelectorAll('header button').forEach(b => { if(b.innerHTML.includes('svg')) b.click(); })")
                 except: pass
                 time.sleep(2)
                 
-                # 'Upload files' menu par click kar ke file dena
+                # Upload files click
                 try:
                     with page.expect_file_chooser(timeout=10000) as fc_info:
                         page.click("text='Upload files'")
@@ -307,7 +331,7 @@ def upload_to_jazzdrive(filename):
                 
                 time.sleep(2)
                 
-                # بڑی فائل والا "Yes" بٹن
+                # 1GB+ warning
                 try:
                     page.click("button:has-text('Yes'), button:has-text('YES'), button:has-text('yes')", timeout=4000)
                     bot.send_message(CHAT_ID, "⚠️ Bari file (1GB+) warning detect hui, 'Yes' par click kar diya hai!")
@@ -315,9 +339,9 @@ def upload_to_jazzdrive(filename):
                 except:
                     pass
                 
-                bot.send_message(CHAT_ID, "📁 File website par lag gayi hai. Har 1 minute baad aapko progress ka screenshot milega! ⏳")
+                bot.send_message(CHAT_ID, "📁 File website par lag gayi hai. Har 1 minute baad progress screenshot milega! ⏳")
                 
-                # Live Progress Screenshots
+                # Progress screenshots
                 upload_done = False
                 for i in range(25): 
                     try:
@@ -350,10 +374,10 @@ def upload_to_jazzdrive(filename):
         if os.path.exists(filename): os.remove(filename)
 
 # ---------------------------
-# بوٹ شروع کریں
+# START BOT
 # ---------------------------
 try: 
-    bot.send_message(CHAT_ID, "🟢 **System Online!**\nWaiting for Direct links... 🚀")
+    bot.send_message(CHAT_ID, "🟢 **System Online!**\nYouTube TV code support enabled! 🚀")
 except: 
     pass
 
