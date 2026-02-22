@@ -1,0 +1,37 @@
+name: Jazz 24/7 Bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  run_bot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 ffmpeg
+          pip install playwright pyTelegramBotAPI yt-dlp    # 👈 yt-dlp شامل کیا
+          playwright install chromium
+
+      - name: Run Bot (Loop Mode)
+        timeout-minutes: 350 
+        continue-on-error: true
+        run: python upload.py
+
+      - name: Auto-Restart Trigger 🔄
+        if: always()
+        run: |
+          echo "Restarting workflow..."
+          curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/${{ github.repository }}/actions/workflows/run.yml/dispatches \
+          -d '{"ref":"main"}'
