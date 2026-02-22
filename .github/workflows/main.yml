@@ -21,7 +21,7 @@ jobs:
           sudo apt-get install -y aria2 ffmpeg python3-pip
           python3 -m pip install --upgrade pip
           python3 -m pip install playwright pyTelegramBotAPI
-          # Force install latest pytubefix
+          # 🔥 Yeh line pakka check kar — latest version install hogi
           python3 -m pip uninstall -y pytubefix || true
           python3 -m pip install git+https://github.com/JuanBindez/pytubefix.git --force-reinstall
           python3 -m playwright install chromium
