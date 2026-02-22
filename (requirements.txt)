@@ -1,4 +1,0 @@
-pyTelegramBotAPI==4.15.4
-aiohttp
-nest_asyncio
-playwright
