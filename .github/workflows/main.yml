@@ -18,24 +18,19 @@ jobs:
       - name: Setup Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y aria2 ffmpeg python3-pip
-          python3 -m pip install --upgrade pip
-          python3 -m pip install playwright pyTelegramBotAPI
-          
-          # 🔥 Purana hata ke naya install
-          python3 -m pip uninstall -y pytubefix || true
-          python3 -m pip install git+https://github.com/JuanBindez/pytubefix.git --force-reinstall
-          
-          python3 -m playwright install chromium
+          sudo apt-get install -y aria2 ffmpeg
+          pip install playwright pyTelegramBotAPI pytubefix
+          playwright install chromium
 
-      - name: Run Bot
-        timeout-minutes: 350
+      - name: Run Bot (Loop Mode)
+        timeout-minutes: 350 
         continue-on-error: true
-        run: python3 upload.py
+        run: python upload.py
 
-      - name: Auto-Restart Trigger
+      - name: Auto-Restart Trigger 🔄
         if: always()
         run: |
+          echo "Restarting workflow..."
           curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json" \
           https://api.github.com/repos/${{ github.repository }}/actions/workflows/run.yml/dispatches \
