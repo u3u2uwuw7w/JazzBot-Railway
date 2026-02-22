@@ -1,0 +1,63 @@
+name: Jazz 24/7 Bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  run_bot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 ffmpeg python3-pip
+          python3 -m pip install --upgrade pip
+
+          # Pehle purane versions hatao
+          python3 -m pip uninstall -y pytubefix || true
+          python3 -m pip uninstall -y yt-dlp || true
+
+          # Fresh install from GitHub
+          python3 -m pip install git+https://github.com/JuanBindez/pytubefix.git --force-reinstall --no-cache-dir
+
+          # Check version and callback support
+          python3 -c "
+import sys
+try:
+    from pytubefix import YouTube
+    import inspect
+    sig = inspect.signature(YouTube.__init__)
+    has_callback = 'on_oauth_callback' in sig.parameters
+    print(f'✅ pytubefix installed. Callback supported: {has_callback}')
+    if not has_callback:
+        print('❌ Callback not found, wrong version!')
+        sys.exit(1)
+except ImportError as e:
+    print(f'❌ Import failed: {e}')
+    sys.exit(1)
+"
+
+          # Install other dependencies
+          python3 -m pip install playwright pyTelegramBotAPI
+          python3 -m playwright install chromium
+
+      - name: Run Bot
+        timeout-minutes: 350
+        continue-on-error: true
+        run: python3 upload.py
+
+      - name: Auto-Restart Trigger
+        if: always()
+        run: |
+          curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/${{ github.repository }}/actions/workflows/run.yml/dispatches \
+          -d '{"ref":"main"}'
