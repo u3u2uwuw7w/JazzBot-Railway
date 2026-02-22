@@ -9,8 +9,8 @@ from playwright.sync_api import sync_playwright
 import yt_dlp
 
 # 🔑 اپنی تفصیلات
-TOKEN = "8485872476:AAGt-C0JKjr6JpLwvIGtGWwMh-sFh0-PsC0" 
-CHAT_ID = 7144917062 
+TOKEN = "8599854738:AAH330JR9zLBXYvNTONm7HF9q_sdZy7qXVM" 
+CHAT_ID = 7186647955
 
 bot = telebot.TeleBot(TOKEN)
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(message)s')
